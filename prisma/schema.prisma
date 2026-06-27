@@ -1,0 +1,443 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  WAREHOUSE_OPERATOR
+  CUSTOMER
+}
+
+enum CustomerStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ForecastStatus {
+  DRAFT
+  SUBMITTED
+  RECEIVING
+  RECEIVED
+  EXCEPTION
+  CLOSED
+}
+
+enum BoxStatus {
+  PENDING
+  LABEL_SCANNED
+  VERIFYING
+  VERIFIED
+  EXCEPTION
+}
+
+enum RechargeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum WalletTransactionType {
+  RECHARGE
+  BOX_CHARGE
+  ITEM_CHARGE
+  REVERSAL
+}
+
+enum WalletTransactionStatus {
+  SUCCESS
+  FAILED
+  REVERSED
+}
+
+enum BillingMode {
+  PER_BOX
+  PER_ITEM
+}
+
+enum ScanAnomalyType {
+  NORMAL
+  SHORTAGE
+  OVERAGE
+  DUPLICATE
+}
+
+enum BoxExceptionResolution {
+  PENDING
+  CONFIRMED_NORMAL
+  CUSTOMER_RESPONSIBLE
+  WAREHOUSE_RESPONSIBLE
+}
+
+enum FileAssetCategory {
+  RECHARGE_PROOF
+  EXPENSE_VOUCHER
+  BOX_EXCEPTION_EVIDENCE
+  FINANCE_ARCHIVE
+}
+
+enum FinanceArchiveType {
+  CUSTOMER_STATEMENT_PDF
+  CUSTOMER_STATEMENT_CSV
+  FINANCE_REPORT_CSV
+}
+
+enum ApiScope {
+  FORECAST_CREATE
+  FORECAST_READ
+  BOX_READ
+  WALLET_READ
+  TRANSACTION_READ
+}
+
+model Customer {
+  id               String            @id @default(cuid())
+  companyName      String
+  contactName      String
+  code             String            @unique
+  status           CustomerStatus    @default(ACTIVE)
+  remarks          String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  users            User[]
+  forecasts        Forecast[]
+  billingPlans     BillingPlan[]
+  wallet           Wallet?
+  rechargeRequests RechargeRequest[]
+  expenses         Expense[]
+  auditLogs        AuditLog[]
+  apiKeys          CustomerApiKey[]
+  apiRequestLogs   ApiRequestLog[]
+  financeArchives  FinanceArchive[]
+}
+
+model User {
+  id                      String                       @id @default(cuid())
+  username                String                       @unique
+  passwordHash            String
+  name                    String
+  role                    UserRole
+  customerId              String?
+  customer                Customer?                    @relation(fields: [customerId], references: [id])
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
+  auditLogs               AuditLog[]
+  boxScanRecords          BoxScanRecord[]
+  trackingScans           TrackingScanRecord[]
+  rechargeReviews         RechargeRequest[]            @relation("RechargeReviewer")
+  walletTransactions      WalletTransaction[]          @relation("WalletOperator")
+  uploadedFiles           FileAsset[]
+  generatedApiKeys        CustomerApiKey[]             @relation("ApiKeyOperator")
+  resolvedBoxes           ForecastBox[]                @relation("BoxResolvedBy")
+  revokedApiKeys          CustomerApiKey[]             @relation("ApiKeyRevoker")
+  handledExceptionRecords BoxExceptionHandlingRecord[]
+  generatedFinanceArchives FinanceArchive[]
+}
+
+model Channel {
+  id          String               @id @default(cuid())
+  name        String               @unique
+  code        String               @unique
+  enabled     Boolean              @default(true)
+  sortOrder   Int                  @default(0)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  boxChannels ForecastBoxChannel[]
+}
+
+model Forecast {
+  id                 String              @id @default(cuid())
+  forecastNo         String              @unique
+  customerId         String
+  customer           Customer            @relation(fields: [customerId], references: [id])
+  status             ForecastStatus      @default(DRAFT)
+  totalBoxes         Int
+  notes              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  submittedAt        DateTime?
+  receivedAt         DateTime?
+  boxes              ForecastBox[]
+  walletTransactions WalletTransaction[]
+  auditLogs          AuditLog[]
+}
+
+model ForecastBox {
+  id                        String                       @id @default(cuid())
+  forecastId                String
+  forecast                  Forecast                     @relation(fields: [forecastId], references: [id])
+  boxNo                     String                       @unique
+  boxIndex                  Int
+  boxSpec                   String
+  expectedOrderCount        Int
+  status                    BoxStatus                    @default(PENDING)
+  scannedAt                 DateTime?
+  completedAt               DateTime?
+  anomalyType               ScanAnomalyType              @default(NORMAL)
+  anomalyNote               String?
+  exceptionResolution       BoxExceptionResolution       @default(PENDING)
+  exceptionResolvedAt       DateTime?
+  exceptionResolvedByUserId String?
+  exceptionResolvedByUser   User?                        @relation("BoxResolvedBy", fields: [exceptionResolvedByUserId], references: [id])
+  exceptionResolutionNote   String?
+  channels                  ForecastBoxChannel[]
+  boxScanRecords            BoxScanRecord[]
+  trackingScans             TrackingScanRecord[]
+  walletTransactions        WalletTransaction[]
+  exceptionRecords          BoxExceptionHandlingRecord[]
+
+  @@unique([forecastId, boxIndex])
+}
+
+model ForecastBoxChannel {
+  id            String      @id @default(cuid())
+  forecastBoxId String
+  channelId     String
+  forecastBox   ForecastBox @relation(fields: [forecastBoxId], references: [id])
+  channel       Channel     @relation(fields: [channelId], references: [id])
+
+  @@unique([forecastBoxId, channelId])
+}
+
+model BoxScanRecord {
+  id            String      @id @default(cuid())
+  forecastBoxId String
+  forecastBox   ForecastBox @relation(fields: [forecastBoxId], references: [id])
+  operatorId    String
+  operator      User        @relation(fields: [operatorId], references: [id])
+  scannedAt     DateTime    @default(now())
+  source        String      @default("box_label")
+  createdAt     DateTime    @default(now())
+}
+
+model TrackingScanRecord {
+  id                  String               @id @default(cuid())
+  forecastBoxId       String
+  forecastBox         ForecastBox          @relation(fields: [forecastBoxId], references: [id])
+  trackingNo          String
+  operatorId          String
+  operator            User                 @relation(fields: [operatorId], references: [id])
+  scannedAt           DateTime             @default(now())
+  isDuplicate         Boolean              @default(false)
+  duplicateOfId       String?
+  duplicateOf         TrackingScanRecord?  @relation("TrackingDuplicateChain", fields: [duplicateOfId], references: [id])
+  duplicateScans      TrackingScanRecord[] @relation("TrackingDuplicateChain")
+  createdAt           DateTime             @default(now())
+  walletTransactionId String?              @unique
+  walletTransaction   WalletTransaction?   @relation("TrackingCharge", fields: [walletTransactionId], references: [id])
+}
+
+model BillingPlan {
+  id          String      @id @default(cuid())
+  customerId  String
+  customer    Customer    @relation(fields: [customerId], references: [id])
+  mode        BillingMode
+  unitPrice   Decimal
+  currency    String
+  enabled     Boolean     @default(true)
+  effectiveAt DateTime
+  remarks     String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model Wallet {
+  id           String              @id @default(cuid())
+  customerId   String              @unique
+  customer     Customer            @relation(fields: [customerId], references: [id])
+  balance      Decimal             @default(0)
+  currency     String              @default("USD")
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  transactions WalletTransaction[]
+}
+
+model RechargeRequest {
+  id                  String             @id @default(cuid())
+  customerId          String
+  customer            Customer           @relation(fields: [customerId], references: [id])
+  paymentChannel      String
+  screenshotUrl       String?
+  amount              Decimal
+  currency            String
+  remarks             String?
+  status              RechargeStatus     @default(PENDING)
+  rejectReason        String?
+  reviewedAt          DateTime?
+  reviewerId          String?
+  reviewer            User?              @relation("RechargeReviewer", fields: [reviewerId], references: [id])
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  walletTransactionId String?            @unique
+  walletTransaction   WalletTransaction? @relation("RechargeWalletTransaction", fields: [walletTransactionId], references: [id])
+  attachmentId        String?            @unique
+  attachment          FileAsset?         @relation("RechargeAttachment", fields: [attachmentId], references: [id])
+}
+
+model WalletTransaction {
+  id                        String                  @id @default(cuid())
+  walletId                  String
+  wallet                    Wallet                  @relation(fields: [walletId], references: [id])
+  type                      WalletTransactionType
+  status                    WalletTransactionStatus @default(SUCCESS)
+  amount                    Decimal
+  currency                  String
+  balanceBefore             Decimal
+  balanceAfter              Decimal
+  businessType              BillingMode?
+  forecastId                String?
+  forecast                  Forecast?               @relation(fields: [forecastId], references: [id])
+  forecastBoxId             String?
+  forecastBox               ForecastBox?            @relation(fields: [forecastBoxId], references: [id])
+  trackingNo                String?
+  rechargeRequestId         String?                 @unique
+  rechargeRequest           RechargeRequest?        @relation("RechargeWalletTransaction")
+  trackingScanRecord        TrackingScanRecord?     @relation("TrackingCharge")
+  reversedFromTransactionId String?
+  reversedFromTransaction   WalletTransaction?      @relation("WalletTransactionReversal", fields: [reversedFromTransactionId], references: [id])
+  reversalTransactions      WalletTransaction[]     @relation("WalletTransactionReversal")
+  remarks                   String?
+  operatorId                String?
+  operator                  User?                   @relation("WalletOperator", fields: [operatorId], references: [id])
+  createdAt                 DateTime                @default(now())
+}
+
+model Expense {
+  id           String     @id @default(cuid())
+  customerId   String?
+  customer     Customer?  @relation(fields: [customerId], references: [id])
+  name         String
+  amount       Decimal
+  currency     String
+  expenseDate  DateTime
+  remarks      String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  attachmentId String?    @unique
+  attachment   FileAsset? @relation("ExpenseAttachment", fields: [attachmentId], references: [id])
+}
+
+model AuditLog {
+  id         String    @id @default(cuid())
+  action     String
+  entityType String
+  entityId   String
+  detail     String
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id])
+  forecastId String?
+  forecast   Forecast? @relation(fields: [forecastId], references: [id])
+  createdAt  DateTime  @default(now())
+}
+
+model FileAsset {
+  id                   String                           @id @default(cuid())
+  category             FileAssetCategory
+  storagePath          String
+  storageFilename      String
+  originalFilename     String
+  mimeType             String
+  sizeBytes            Int
+  uploadedAt           DateTime                         @default(now())
+  uploadedByUserId     String?
+  uploadedByUser       User?                            @relation(fields: [uploadedByUserId], references: [id])
+  rechargeRequest      RechargeRequest?                 @relation("RechargeAttachment")
+  expense              Expense?                         @relation("ExpenseAttachment")
+  exceptionAttachments BoxExceptionHandlingAttachment[]
+  financeArchive       FinanceArchive?
+}
+
+model CustomerApiKey {
+  id                 String                @id @default(cuid())
+  customerId         String
+  customer           Customer              @relation(fields: [customerId], references: [id])
+  name               String
+  remarks            String?
+  keyHash            String                @unique
+  keyPrefix          String
+  enabled            Boolean               @default(true)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  lastUsedAt         DateTime?
+  expiresAt          DateTime?
+  revokedAt          DateTime?
+  rateLimitPerMinute Int                   @default(60)
+  createdByUserId    String?
+  createdByUser      User?                 @relation("ApiKeyOperator", fields: [createdByUserId], references: [id])
+  revokedByUserId    String?
+  revokedByUser      User?                 @relation("ApiKeyRevoker", fields: [revokedByUserId], references: [id])
+  requestLogs        ApiRequestLog[]
+  scopes             CustomerApiKeyScope[]
+}
+
+model ApiRequestLog {
+  id            String          @id @default(cuid())
+  customerId    String
+  customer      Customer        @relation(fields: [customerId], references: [id])
+  apiKeyId      String?
+  apiKey        CustomerApiKey? @relation(fields: [apiKeyId], references: [id])
+  path          String
+  method        String
+  requestAt     DateTime        @default(now())
+  success       Boolean
+  statusCode    Int
+  requiredScope ApiScope?
+  rateLimited   Boolean         @default(false)
+  forbidden     Boolean         @default(false)
+  errorMessage  String?
+}
+
+model CustomerApiKeyScope {
+  id       String         @id @default(cuid())
+  apiKeyId String
+  scope    ApiScope
+  apiKey   CustomerApiKey @relation(fields: [apiKeyId], references: [id])
+
+  @@unique([apiKeyId, scope])
+}
+
+model BoxExceptionHandlingRecord {
+  id              String                           @id @default(cuid())
+  forecastBoxId   String
+  forecastBox     ForecastBox                      @relation(fields: [forecastBoxId], references: [id])
+  resolution      BoxExceptionResolution
+  note            String?
+  handledByUserId String
+  handledByUser   User                             @relation(fields: [handledByUserId], references: [id])
+  handledAt       DateTime                         @default(now())
+  attachments     BoxExceptionHandlingAttachment[]
+}
+
+model BoxExceptionHandlingAttachment {
+  id          String                     @id @default(cuid())
+  recordId    String
+  fileAssetId String
+  record      BoxExceptionHandlingRecord @relation(fields: [recordId], references: [id])
+  fileAsset   FileAsset                  @relation(fields: [fileAssetId], references: [id])
+
+  @@unique([recordId, fileAssetId])
+}
+
+model FinanceArchive {
+  id                String             @id @default(cuid())
+  archiveNo         String             @unique
+  type              FinanceArchiveType
+  customerId        String?
+  customer          Customer?          @relation(fields: [customerId], references: [id])
+  dateFrom          DateTime
+  dateTo            DateTime
+  storagePath       String
+  downloadPath      String
+  fileAssetId       String             @unique
+  fileAsset         FileAsset          @relation(fields: [fileAssetId], references: [id])
+  generatedByUserId String?
+  generatedByUser   User?              @relation(fields: [generatedByUserId], references: [id])
+  remarks           String?
+  createdAt         DateTime           @default(now())
+}
